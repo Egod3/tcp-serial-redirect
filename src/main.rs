@@ -43,7 +43,7 @@ fn main() {
         0 => println!("Debug mode is off"),
         1 => println!("Debug mode is kind of on"),
         2 => println!("Debug mode is on"),
-        _ => println!("Don't be crazy"),
+        _ => println!("Debug mode is ON"),
     }
 
     println!("port: {}", cli.port);
@@ -63,7 +63,7 @@ fn main() {
                     let read_stream = stream.try_clone().expect("failed to clone stream");
                     let serialport = serialport.clone();
                     thread::spawn(move || {
-                        handle_connection(read_stream, &serialport, cli.baud, cli.debug)
+                        let _ = handle_connection(read_stream, &serialport, cli.baud, cli.debug);
                     });
                 }
                 Err(e) => {
@@ -83,7 +83,10 @@ fn handle_connection(
     let immut_stream = stream
         .try_clone()
         .expect("failed to clone immutable stream");
-    let mut ser_port = TTYPort::open(&serialport::new(serial_dev, baud)).expect("unable to open");
+    if debug >= 1 {
+        println!("enter handle_connection()");
+    }
+    let mut ser_port = TTYPort::open(&serialport::new(serial_dev, baud)).expect("port in use...");
 
     let mut stream_fds_in = [PollFd::new(immut_stream.as_fd(), PollFlags::POLLIN)];
     let timeout = TimeSpec::milliseconds(1);
@@ -131,27 +134,29 @@ fn handle_connection(
                 .contains(PollFlags::POLLERR | PollFlags::POLLHUP | PollFlags::POLLNVAL);
         }
         if stream_sig_brkn_pipe {
+            println!("stream: broken pipe received, returning to main loop");
             return Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "stream: broken pipe received, returning to main loop",
             ));
         }
         if serial_sig_err {
+            println!("serial: err received, returning to main loop");
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotConnected,
                 "serial: err received, returning to main loop",
             ));
         }
         if stream_sig {
-            let rd_st = stream.read(&mut rd_buf)?;
+            let rd_st = stream.read(&mut rd_buf).unwrap();
             if rd_st > 0 {
-                if debug == 2 {
+                if debug >= 2 {
                     println!("got {} bytes of data from stream", rd_st);
                 }
                 let cp_status = ser_port.write(&rd_buf[0..rd_st]);
                 match cp_status {
                     Ok(cp_status) => {
-                        if debug == 2 {
+                        if debug >= 2 {
                             println!("serial port write status {}", cp_status);
                         }
                     }
@@ -171,25 +176,22 @@ fn handle_connection(
             match cp_read_status {
                 Ok(cp_bytes_read) => {
                     if cp_bytes_read > 0 {
-                        if debug == 2 {
+                        if debug >= 2 {
                             println!("got {} bytes of data from serialport", cp_bytes_read);
                         }
                         let wr_status = stream.write(&rd_buf[0..cp_bytes_read]);
-                        let err_string = "broken pipe (os error 32)";
                         match wr_status {
                             Ok(cp_status) => {
-                                if debug == 2 {
+                                if debug >= 2 {
                                     println!("stream write status {}", cp_status);
                                 }
                             }
                             Err(e) => {
                                 println!("error writing to stream. {}. returning to main loop", e);
-                                if e.to_string() == err_string {
-                                    return Err(std::io::Error::new(
-                                        std::io::ErrorKind::BrokenPipe,
-                                        "broken pipe received, returning to main loop",
-                                    ));
-                                }
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::BrokenPipe,
+                                    "broken pipe received, returning to main loop",
+                                ));
                             }
                         }
                     }
